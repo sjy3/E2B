@@ -20,6 +20,7 @@ const API_KEY_B = `e2b_${'b'.repeat(40)}`
 const DOMAIN_A = 'client-a.test'
 const DOMAIN_B = 'client-b.test'
 const DOMAIN_ENV = 'env.test'
+const VEFAAS_API_URL = 'https://api.vefaas-e2b.sandbox-cn-beijing.volcapig.com'
 
 interface RecordedRequest {
   url: string
@@ -36,6 +37,11 @@ function record(request: Request) {
 }
 
 const lastRequest = () => requests[requests.length - 1]
+const lastRequestUrl = () => new URL(lastRequest().url)
+const lastRequestMetadata = () =>
+  Object.fromEntries(
+    new URLSearchParams(lastRequestUrl().searchParams.get('metadata') ?? '')
+  )
 
 const sandboxResponse = {
   sandboxID: 'test-sandbox-id',
@@ -234,6 +240,86 @@ test('client retries sandbox creation after a 503', async () => {
   await client.Sandbox.create()
 
   assert.equal(attempts, 2)
+})
+
+test('Sandbox.list maps template to vefaas function metadata on vefaas API URL', async () => {
+  const client = new E2B({
+    apiKey: API_KEY_A,
+    apiUrl: `${VEFAAS_API_URL}/`,
+  })
+
+  await client.Sandbox.list({
+    query: {
+      metadata: { foo: 'bar' },
+      template: 'aaaa',
+    },
+  }).nextItems()
+
+  expect(lastRequestUrl().searchParams.get('template')).toBeNull()
+  expect(lastRequestMetadata()).toEqual({
+    foo: 'bar',
+    vefaas_function_id: 'aaaa',
+  })
+})
+
+test('Sandbox.list maps template using E2B_API_URL from the environment', async () => {
+  const previousApiUrl = process.env.E2B_API_URL
+  process.env.E2B_API_URL = `${VEFAAS_API_URL}/`
+
+  try {
+    await Sandbox.list({
+      apiKey: API_KEY_A,
+      query: {
+        template: 'aaaa',
+      },
+    }).nextItems()
+  } finally {
+    if (previousApiUrl === undefined) {
+      delete process.env.E2B_API_URL
+    } else {
+      process.env.E2B_API_URL = previousApiUrl
+    }
+  }
+
+  expect(lastRequestUrl().searchParams.get('template')).toBeNull()
+  expect(lastRequestMetadata()).toEqual({
+    vefaas_function_id: 'aaaa',
+  })
+})
+
+test('Sandbox.list keeps template filter on non-vefaas API URLs', async () => {
+  const client = new E2B({
+    apiKey: API_KEY_A,
+    apiUrl: 'https://api.not-vefaas.test',
+  })
+
+  await client.Sandbox.list({
+    query: {
+      metadata: { foo: 'bar' },
+      template: 'aaaa',
+    },
+  }).nextItems()
+
+  expect(lastRequestUrl().searchParams.get('template')).toBe('aaaa')
+  expect(lastRequestMetadata()).toEqual({ foo: 'bar' })
+})
+
+test('Sandbox.list rejects conflicting vefaas function metadata', async () => {
+  const client = new E2B({
+    apiKey: API_KEY_A,
+    apiUrl: VEFAAS_API_URL,
+  })
+
+  await expect(
+    client.Sandbox.list({
+      query: {
+        metadata: { vefaas_function_id: 'bbbb' },
+        template: 'aaaa',
+      },
+    }).nextItems()
+  ).rejects.toThrow(
+    'Cannot use query.template with metadata.vefaas_function_id'
+  )
 })
 
 test('client.Sandbox can be rebound to a variable', async () => {

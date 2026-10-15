@@ -76,6 +76,8 @@ from e2b.paginator import PaginatorBase
 
 
 MAX_FORK_COUNT = 20
+VEFAAS_API_URL = "https://api.vefaas-e2b.sandbox-cn-beijing.volcapig.com"
+VEFAAS_FUNCTION_ID_METADATA_KEY = "vefaas_function_id"
 
 
 def to_sandbox_create_response(sandbox: CreatedSandbox) -> SandboxCreateResponse:
@@ -1207,6 +1209,35 @@ class SandboxQuery:
 
     template: Optional[str] = None
     """Filter sandboxes by a template ID or name."""
+
+
+def normalize_api_url(api_url: str) -> str:
+    """Normalize API URL for host-specific compatibility checks."""
+    return api_url.rstrip("/")
+
+
+def normalize_sandbox_list_query_for_vefaas(
+    api_url: str, query: Optional[SandboxQuery]
+) -> Optional[SandboxQuery]:
+    if normalize_api_url(api_url) != VEFAAS_API_URL or not query or not query.template:
+        return query
+
+    metadata = dict(query.metadata or {})
+    existing_function_id = metadata.get(VEFAAS_FUNCTION_ID_METADATA_KEY)
+    if existing_function_id and existing_function_id != query.template:
+        raise InvalidArgumentException(
+            f"Cannot use query.template with metadata.{VEFAAS_FUNCTION_ID_METADATA_KEY} "
+            "on this API URL because query.template is translated to "
+            f"metadata.{VEFAAS_FUNCTION_ID_METADATA_KEY}."
+        )
+
+    metadata[VEFAAS_FUNCTION_ID_METADATA_KEY] = query.template
+    return SandboxQuery(
+        metadata=metadata,
+        state=query.state,
+        started_after=query.started_after,
+        template=None,
+    )
 
 
 @dataclass

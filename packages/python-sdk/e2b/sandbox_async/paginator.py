@@ -13,6 +13,7 @@ from e2b.sandbox.sandbox_api import (
     SandboxInfo,
     SnapshotPaginatorBase,
     SnapshotInfo,
+    normalize_sandbox_list_query_for_vefaas,
 )
 from e2b.api import handle_api_exception
 from e2b.api.client.models.error import Error
@@ -49,12 +50,15 @@ class AsyncSandboxPaginator(SandboxPaginatorBase):
         if not self.has_next:
             raise Exception("No more items to fetch")
 
+        config = ConnectionConfig(**merge_api_params(self._opts, opts))
+        query = normalize_sandbox_list_query_for_vefaas(config.api_url, self.query)
+
         # Convert filters to the format expected by the API
         metadata: Optional[str] = None
-        if self.query and self.query.metadata:
+        if query and query.metadata:
             quoted_metadata = {
                 urllib.parse.quote(k): urllib.parse.quote(v)
-                for k, v in self.query.metadata.items()
+                for k, v in query.metadata.items()
             }
             metadata = urllib.parse.urlencode(quoted_metadata)
 
@@ -68,20 +72,17 @@ class AsyncSandboxPaginator(SandboxPaginatorBase):
                     f"Invalid order {self.order!r}, expected 'asc' or 'desc'"
                 )
 
-        config = ConnectionConfig(**merge_api_params(self._opts, opts))
         api_client = get_api_client(config)
         res = await get_v2_sandboxes.asyncio_detailed(
             client=api_client,
             metadata=metadata if metadata else UNSET,
-            state=self.query.state if self.query and self.query.state else UNSET,
+            state=query.state if query and query.state else UNSET,
             started_after=(
-                self.query.started_after.astimezone()
-                if self.query and self.query.started_after
+                query.started_after.astimezone()
+                if query and query.started_after
                 else UNSET
             ),
-            template=(
-                self.query.template if self.query and self.query.template else UNSET
-            ),
+            template=(query.template if query and query.template else UNSET),
             order=order,
             limit=self.limit if self.limit else UNSET,
             next_token=self._next_token if self._next_token else UNSET,

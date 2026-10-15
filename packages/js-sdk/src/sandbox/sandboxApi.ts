@@ -840,6 +840,45 @@ export interface SandboxListOpts extends Omit<SandboxApiOpts, 'signal'> {
   nextToken?: string
 }
 
+const VEFAAS_API_URL = 'https://api.vefaas-e2b.sandbox-cn-beijing.volcapig.com'
+const VEFAAS_FUNCTION_ID_METADATA_KEY = 'vefaas_function_id'
+
+function normalizeApiUrl(apiUrl: string): string {
+  try {
+    const url = new URL(apiUrl)
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return apiUrl.replace(/\/+$/, '')
+  }
+}
+
+function normalizeSandboxListQueryForVefaas(
+  apiUrl: string,
+  query: SandboxListOpts['query']
+): SandboxListOpts['query'] {
+  if (normalizeApiUrl(apiUrl) !== VEFAAS_API_URL || !query?.template) {
+    return query
+  }
+
+  const metadata = { ...query.metadata }
+  const existingFunctionId = metadata[VEFAAS_FUNCTION_ID_METADATA_KEY]
+  if (existingFunctionId && existingFunctionId !== query.template) {
+    throw new InvalidArgumentError(
+      `Cannot use query.template with metadata.${VEFAAS_FUNCTION_ID_METADATA_KEY} on this API URL because query.template is translated to metadata.${VEFAAS_FUNCTION_ID_METADATA_KEY}.`
+    )
+  }
+
+  metadata[VEFAAS_FUNCTION_ID_METADATA_KEY] = query.template
+
+  return {
+    ...query,
+    metadata,
+    template: undefined,
+  }
+}
+
 export interface SandboxMetricsOpts extends SandboxApiOpts {
   /**
    * Start time for the metrics, defaults to the start of the sandbox
@@ -1997,10 +2036,14 @@ export class SandboxPaginator extends Paginator<SandboxInfo, SandboxApiOpts> {
       throw new Error('No more items to fetch')
     }
 
+    const apiOpts = ConnectionConfig.mergeOpts(this.opts, opts)
+    const config = new ConnectionConfig(apiOpts)
+    const query = normalizeSandboxListQueryForVefaas(config.apiUrl, this.query)
+
     let metadata = undefined
-    if (this.query?.metadata) {
+    if (query?.metadata) {
       const encodedPairs: Record<string, string> = Object.fromEntries(
-        Object.entries(this.query.metadata).map(([key, value]) => [
+        Object.entries(query.metadata).map(([key, value]) => [
           encodeURIComponent(key),
           encodeURIComponent(value),
         ])
@@ -2009,17 +2052,15 @@ export class SandboxPaginator extends Paginator<SandboxInfo, SandboxApiOpts> {
       metadata = new URLSearchParams(encodedPairs).toString()
     }
 
-    const apiOpts = ConnectionConfig.mergeOpts(this.opts, opts)
-    const config = new ConnectionConfig(apiOpts)
     const client = new ApiClient(config)
 
     const res = await client.api.GET('/v2/sandboxes', {
       params: {
         query: {
           metadata,
-          state: this.query?.state,
-          startedAfter: this.query?.startedAfter?.toISOString(),
-          template: this.query?.template || undefined,
+          state: query?.state,
+          startedAfter: query?.startedAfter?.toISOString(),
+          template: query?.template || undefined,
           order: this.order,
           limit: this.limit,
           nextToken: this.nextToken,
